@@ -13,6 +13,10 @@
 
 #include "nvfp4-head-gemm.hpp"
 
+#include <algorithm>
+#include <thread>
+#include <vector>
+
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
@@ -61,6 +65,46 @@ void install_dense_nvfp4_head(py::module_& linear_module) {
       py::arg("row"), py::arg("out_ptr"), py::arg("k"),
       "Dequantize one row of the packed head into a float buffer. Exposed so the\n"
       "vectorized path can be checked against the definition of record from Python.");
+
+  // Whole-head decode, for the dequantise-once-then-GEMM path. The head is fixed
+  // for the life of the model, so decoding it a single time and caching the result
+  // replaces per-step nibble expansion with a plain matmul; this is the one-time
+  // cost that makes that trade pay. Rows are independent, so it parallelises
+  // across threads and the rows are split in contiguous chunks to keep the packed
+  // and scale reads sequential.
+  linear_module.def(
+      "dense_nvfp4_head_dequant_all",
+      [](intptr_t weight_ptr, intptr_t scale_ptr, float weight_scale_2,
+         intptr_t out_ptr, int n, int k) {
+        const uint8_t* packed = reinterpret_cast<const uint8_t*>(weight_ptr);
+        const float* scale = reinterpret_cast<const float*>(scale_ptr);
+        float* out = reinterpret_cast<float*>(out_ptr);
+        const int khalf = k / 2;
+        const int kgroups = k / 16;
+        const int threads = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+        const int chunk = std::max(1, (n + threads - 1) / threads);
+        std::vector<std::thread> pool;
+        pool.reserve(threads);
+        for (int t = 0; t < threads; ++t) {
+          const int begin = t * chunk;
+          const int end = std::min(n, begin + chunk);
+          if (begin >= end) break;
+          pool.emplace_back([=]() {
+            for (int r = begin; r < end; ++r) {
+              kt::nvfp4_head::dequant_row(packed + static_cast<size_t>(r) * khalf,
+                                          scale + static_cast<size_t>(r) * kgroups, k,
+                                          weight_scale_2,
+                                          out + static_cast<size_t>(r) * k);
+            }
+          });
+        }
+        for (auto& th : pool) th.join();
+      },
+      py::arg("weight_ptr"), py::arg("scale_ptr"), py::arg("weight_scale_2"),
+      py::arg("out_ptr"), py::arg("n"), py::arg("k"),
+      "Dequantize the whole packed head into a float buffer, one row per output row.\n"
+      "Intended to be called once at load so the per-step path can be a plain\n"
+      "matmul instead of re-expanding nibbles on every decode.");
 }
 
 }  // namespace

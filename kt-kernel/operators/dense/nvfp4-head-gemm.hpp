@@ -69,41 +69,45 @@ inline void dequant_row_scalar(const uint8_t* packed, const float* scale, int k,
   }
 }
 
-#if defined(__AVX2__)
-// `_mm256_shuffle_epi8` indexes 16 entries within each 128-bit lane, so the
-// 16-entry table is replicated into both lanes and a raw nibble addresses it.
-// That is the only reason this path is branch-free.
-constexpr uint8_t kNibbleLo[32] = {
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+// Nibble decode shared by both vector paths.
+//
+// Each packed byte yields two CONSECUTIVE outputs -- low nibble then high nibble --
+// and the lane-wise shuffles that look like the natural way to do this
+// (`_mm256_unpacklo_epi8`, `_mm256_shuffle_epi8`) interleave WITHIN 128-bit lanes,
+// so past 8 lanes the result stops matching the packed byte order. The failure is
+// silent: correct shape, plausible magnitudes, wrong values. Expanding the 16
+// nibbles through a table keeps the order obviously right; the multiply that
+// consumes them is still vectorised, and that is where the scale amortisation
+// lives.
+constexpr float kNibbleTable[16] = {0.0f,  0.5f,  1.0f,  1.5f,  2.0f,  3.0f,  4.0f,  6.0f,
+                                    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f};
 
+inline void expand_16(const uint8_t* packed, int kk, float* out16) {
+  for (int t = 0; t < 16; ++t) {
+    const int kx = kk + t;
+    const uint8_t byte = packed[kx >> 1];
+    const uint8_t nib =
+        (kx & 1) ? static_cast<uint8_t>(byte >> 4) : static_cast<uint8_t>(byte & 0x0F);
+    out16[t] = kNibbleTable[nib];
+  }
+}
+
+#if defined(__AVX2__)
 inline void dequant_row_avx2(const uint8_t* packed, const float* scale, int k,
                              float scale2, float* dst) {
   int kk = 0;
-  const __m256i lut = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(kNibbleLo));
-  const __m256i low_mask = _mm256_set1_epi8(0x0F);
   const __m256 vscale2 = _mm256_set1_ps(scale2);
 
   // 16 lanes per iteration: 8 packed bytes produce 16 nibbles, and those 16
-  // nibbles share exactly one group scale, so the multiply is one broadcast.
+  // nibbles share exactly one group scale, so the scale multiply is one broadcast.
   for (; kk + 16 <= k; kk += 16) {
-    const __m128i bytes =
-        _mm_loadl_epi64(reinterpret_cast<const __m128i*>(packed + (kk >> 1)));
-    const __m256i wide = _mm256_cvtepu8_epi16(bytes);
-    const __m256i lo = _mm256_and_si256(wide, low_mask);
-    const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(wide, 4), low_mask);
-    // Interleave lo/hi nibbles so element order matches the packed byte order.
-    const __m256i inter = _mm256_unpacklo_epi8(lo, hi);
-    const __m256i idx = _mm256_shuffle_epi8(lut, inter);
-
+    float nib16[16];
+    expand_16(packed, kk, nib16);
     const __m256 g = _mm256_mul_ps(_mm256_set1_ps(scale[kk >> 4]), vscale2);
-    float tmp[16];
-    _mm256_storeu_ps(tmp, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(
-                              _mm256_castsi256_si128(idx))));
-    _mm256_storeu_ps(tmp + 8, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(
-                                     _mm256_extracti128_si256(idx, 1))));
-    _mm256_storeu_ps(dst + kk, _mm256_mul_ps(_mm256_loadu_ps(tmp), g));
-    _mm256_storeu_ps(dst + kk + 8, _mm256_mul_ps(_mm256_loadu_ps(tmp + 8), g));
+    _mm256_storeu_ps(dst + kk,
+                     _mm256_mul_ps(_mm256_loadu_ps(nib16), g));
+    _mm256_storeu_ps(dst + kk + 8,
+                     _mm256_mul_ps(_mm256_loadu_ps(nib16 + 8), g));
   }
   for (; kk < k; ++kk) {
     const uint8_t byte = packed[kk >> 1];
@@ -116,37 +120,17 @@ inline void dequant_row_avx2(const uint8_t* packed, const float* scale, int k,
 
 #if defined(__AVX512F__)
 // Same shape as the AVX2 path with 512-bit lanes: one broadcast scale multiply per
-// group of 16 instead of per element.
-constexpr uint8_t kNibbleLo512[64] = {
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
-
-inline __m512 nibbles_to_ps_avx512(__m256i idx) {
-  return _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm256_castsi256_si128(idx)));
-}
-
+// group of 16 instead of per element, and the group is exactly one vector.
 inline void dequant_row_avx512(const uint8_t* packed, const float* scale, int k,
                                float scale2, float* dst) {
   int kk = 0;
-  const __m512i lut = _mm512_loadu_si512(reinterpret_cast<const void*>(kNibbleLo512));
   const __m512 vscale2 = _mm512_set1_ps(scale2);
 
-  // 16 lanes per iteration is the group size, so one scale broadcast covers the
-  // whole vector and the tail stays trivially correct.
   for (; kk + 16 <= k; kk += 16) {
-    const __m128i bytes =
-        _mm_loadl_epi64(reinterpret_cast<const __m128i*>(packed + (kk >> 1)));
-    const __m256i wide = _mm256_cvtepu8_epi16(bytes);
-    const __m256i lo = _mm256_and_si256(wide, _mm256_set1_epi8(0x0F));
-    const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(wide, 4), _mm256_set1_epi8(0x0F));
-    const __m256i inter = _mm256_unpacklo_epi8(lo, hi);
-    const __m256i idx = _mm256_shuffle_epi8(_mm512_castsi512_si256(lut), inter);
-
+    float nib16[16];
+    expand_16(packed, kk, nib16);
     const __m512 g = _mm512_mul_ps(_mm512_set1_ps(scale[kk >> 4]), vscale2);
-    const __m512 vals = nibbles_to_ps_avx512(idx);
-    _mm512_storeu_ps(dst + kk, _mm512_mul_ps(vals, g));
+    _mm512_storeu_ps(dst + kk, _mm512_mul_ps(_mm512_loadu_ps(nib16), g));
   }
   for (; kk < k; ++kk) {
     const uint8_t byte = packed[kk >> 1];
@@ -195,6 +179,12 @@ inline float dot_avx2(const float* a, const float* b, int k) {
 inline void dequant_row_scalar(const uint8_t* packed, const float* scale, int k,
                                float scale2, float* dst) {
   detail::dequant_row_scalar(packed, scale, k, scale2, dst);
+}
+
+// Per-ISA dequant, whichever this build selected.
+inline void dequant_row(const uint8_t* packed, const float* scale, int k,
+                        float scale2, float* dst) {
+  detail::dequant_row(packed, scale, k, scale2, dst);
 }
 
 // out[m, n] = sum_k x[m, k] * W[n, k]
