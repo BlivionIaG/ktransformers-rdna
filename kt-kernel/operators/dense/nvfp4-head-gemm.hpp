@@ -115,21 +115,38 @@ inline void dequant_row_avx2(const uint8_t* packed, const float* scale, int k,
 #endif  // __AVX2__
 
 #if defined(__AVX512F__)
+// Same shape as the AVX2 path with 512-bit lanes: one broadcast scale multiply per
+// group of 16 instead of per element.
+constexpr uint8_t kNibbleLo512[64] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+
+inline __m512 nibbles_to_ps_avx512(__m256i idx) {
+  return _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm256_castsi256_si128(idx)));
+}
+
 inline void dequant_row_avx512(const uint8_t* packed, const float* scale, int k,
                                float scale2, float* dst) {
-  const __m512 vscale2 = _mm512_set1_ps(scale2);
   int kk = 0;
+  const __m512i lut = _mm512_loadu_si512(reinterpret_cast<const void*>(kNibbleLo512));
+  const __m512 vscale2 = _mm512_set1_ps(scale2);
+
+  // 16 lanes per iteration is the group size, so one scale broadcast covers the
+  // whole vector and the tail stays trivially correct.
   for (; kk + 16 <= k; kk += 16) {
+    const __m128i bytes =
+        _mm_loadl_epi64(reinterpret_cast<const __m128i*>(packed + (kk >> 1)));
+    const __m256i wide = _mm256_cvtepu8_epi16(bytes);
+    const __m256i lo = _mm256_and_si256(wide, _mm256_set1_epi8(0x0F));
+    const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(wide, 4), _mm256_set1_epi8(0x0F));
+    const __m256i inter = _mm256_unpacklo_epi8(lo, hi);
+    const __m256i idx = _mm256_shuffle_epi8(_mm512_castsi512_si256(lut), inter);
+
     const __m512 g = _mm512_mul_ps(_mm512_set1_ps(scale[kk >> 4]), vscale2);
-    alignas(64) float tmp[16];
-    for (int t = 0; t < 16; ++t) {
-      const int kx = kk + t;
-      const uint8_t byte = packed[kx >> 1];
-      const uint8_t nib =
-          (kx & 1) ? static_cast<uint8_t>(byte >> 4) : static_cast<uint8_t>(byte & 0x0F);
-      tmp[t] = fp4_to_float(nib);
-    }
-    _mm512_storeu_ps(dst + kk, _mm512_mul_ps(_mm512_load_ps(tmp), g));
+    const __m512 vals = nibbles_to_ps_avx512(idx);
+    _mm512_storeu_ps(dst + kk, _mm512_mul_ps(vals, g));
   }
   for (; kk < k; ++kk) {
     const uint8_t byte = packed[kk >> 1];
