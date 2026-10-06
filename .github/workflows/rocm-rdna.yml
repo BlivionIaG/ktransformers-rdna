@@ -1,0 +1,91 @@
+# Compile kt-kernel for gfx1030 and gfx1100. No AMD GPU is available here, so
+# this job does not launch kernels. Image tag tracks the lab pin (ROCm 7.14.0);
+# override it with workflow_dispatch. Fork: https://github.com/BlivionIaG/ktransformers-rdna
+name: ROCm RDNA
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rocm_image:
+        description: Public ROCm dev image
+        default: rocm/dev-ubuntu-24.04:7.14.0-full
+        type: string
+
+concurrency:
+  group: rocm-rdna-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source contracts
+        run: |
+          python3 kt-kernel/test/test_rocm_rdna_phase0.py
+          python3 kt-kernel/test/test_fp8_layerwise_transport_contract.py
+          g++ -std=c++20 -fPIC -c kt-kernel/rocm/rdna_runtime.cpp \
+            -I kt-kernel/rocm \
+            -DKT_RDNA_COMPILED_ARCHS=\"gfx1030,gfx1100\" \
+            -o /tmp/rdna_runtime.o
+          g++ -std=c++20 -c kt-kernel/fp8_layerwise_transport.cpp \
+            -o /tmp/fp8_layerwise_transport_cpu.o
+
+  hip-arch:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ github.event_name == 'workflow_dispatch' && inputs.rocm_image || 'rocm/dev-ubuntu-24.04:7.14.0-full' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake g++ binutils ca-certificates python3
+      - name: Configure gfx1030 and gfx1100
+        run: cmake -S kt-kernel/rocm -B build/rocm -DKT_ROCM_ARCHS='gfx1030;gfx1100'
+      - name: Build device libraries
+        run: cmake --build build/rocm --parallel
+      - name: Reject WMMA on gfx1030 and check the objects
+        run: bash kt-kernel/scripts/rdna_verify_arch_split.sh build/rocm
+      - name: Compile FP8 layerwise transport as HIP host code
+        run: |
+          g++ -std=c++20 -c kt-kernel/fp8_layerwise_transport.cpp \
+            -DKTRANSFORMERS_USE_ROCM -D__HIP_PLATFORM_AMD__ \
+            -I/opt/rocm/include \
+            -o build/fp8_layerwise_transport_rocm.o
+
+  kt-kernel:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ github.event_name == 'workflow_dispatch' && inputs.rocm_image || 'rocm/dev-ubuntu-24.04:7.14.0-full' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Host packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git pkg-config \
+            python3 python3-setuptools python3-dev \
+            libhwloc-dev libnuma-dev libcurl4-openssl-dev ca-certificates
+      - name: CPU submodules only
+        run: git submodule update --init third_party/pybind11 third_party/llama.cpp
+      - name: Build kt-kernel (ROCm, AVX2 CPU experts)
+        env:
+          CPUINFER_USE_ROCM: "1"
+          CPUINFER_ENABLE_AMX: "OFF"
+          CPUINFER_ENABLE_AVX512: "OFF"
+          CPUINFER_CPU_INSTRUCT: AVX2
+          KT_ROCM_ARCHS: "gfx1030;gfx1100"
+          CPUINFER_FORCE_REBUILD: "1"
+        run: |
+          cd kt-kernel
+          python3 setup.py build_ext --inplace
+      - name: Device libraries came out of the same configure
+        run: bash kt-kernel/scripts/rdna_verify_arch_split.sh kt-kernel
