@@ -16,9 +16,34 @@
 
 #if defined(KTRANSFORMERS_USE_CUDA) || defined(USE_CUDA)
 #include <cuda_runtime_api.h>
-#define KT_FP8_LAYERWISE_HAS_CUDA 1
+#define KT_FP8_LAYERWISE_HAS_DEVICE 1
+#elif defined(KTRANSFORMERS_USE_ROCM) || defined(USE_HIP)
+// Host-side HIP runtime only. The copy engine is cudaMemcpyAsync-shaped H2D
+// of the existing FP8 payload; an INT4/W4A16 payload is a later change.
+#ifndef __HIP_PLATFORM_AMD__
+#define __HIP_PLATFORM_AMD__
+#endif
+#include <hip/hip_runtime_api.h>
+#define cudaError_t hipError_t
+#define cudaSuccess hipSuccess
+#define cudaErrorNotReady hipErrorNotReady
+#define cudaStream_t hipStream_t
+#define cudaEvent_t hipEvent_t
+#define cudaStreamNonBlocking hipStreamNonBlocking
+#define cudaEventDisableTiming hipEventDisableTiming
+#define cudaMemcpyHostToDevice hipMemcpyHostToDevice
+#define cudaSetDevice hipSetDevice
+#define cudaStreamCreateWithFlags hipStreamCreateWithFlags
+#define cudaEventCreateWithFlags hipEventCreateWithFlags
+#define cudaEventDestroy hipEventDestroy
+#define cudaStreamDestroy hipStreamDestroy
+#define cudaMemcpyAsync hipMemcpyAsync
+#define cudaEventRecord hipEventRecord
+#define cudaEventQuery hipEventQuery
+#define cudaGetErrorString hipGetErrorString
+#define KT_FP8_LAYERWISE_HAS_DEVICE 1
 #else
-#define KT_FP8_LAYERWISE_HAS_CUDA 0
+#define KT_FP8_LAYERWISE_HAS_DEVICE 0
 #endif
 
 namespace kt::layerwise {
@@ -251,7 +276,7 @@ class FP8LayerwiseTransport::Impl {
       last_ready_sequence_[slot] = load_acquire(control_->ready[slot].sequence);
     }
 
-#if KT_FP8_LAYERWISE_HAS_CUDA
+#if KT_FP8_LAYERWISE_HAS_DEVICE
     worker_ = std::thread(&Impl::consumer_main, this);
     std::unique_lock lock(init_mutex_);
     init_cv_.wait(lock, [this] { return init_complete_; });
@@ -262,7 +287,8 @@ class FP8LayerwiseTransport::Impl {
       throw std::runtime_error(init_error_);
     }
 #else
-    throw std::runtime_error("FP8 layerwise transport requires a CUDA-enabled kt-kernel build");
+    throw std::runtime_error(
+        "FP8 layerwise transport requires a CUDA- or ROCm-enabled kt-kernel build");
 #endif
   }
 
@@ -530,7 +556,7 @@ class FP8LayerwiseTransport::Impl {
         });
   }
 
-#if KT_FP8_LAYERWISE_HAS_CUDA
+#if KT_FP8_LAYERWISE_HAS_DEVICE
   static void check_cuda(cudaError_t status, const char* operation) {
     if (status == cudaSuccess) return;
     std::ostringstream message;
@@ -589,7 +615,7 @@ class FP8LayerwiseTransport::Impl {
 #endif
 
   void consumer_main() noexcept {
-#if KT_FP8_LAYERWISE_HAS_CUDA
+#if KT_FP8_LAYERWISE_HAS_DEVICE
     try {
       initialize_cuda_worker();
       {
@@ -703,7 +729,7 @@ class FP8LayerwiseTransport::Impl {
   std::uint64_t local_h2d_ns_ = 0;
   std::uint64_t local_bytes_ = 0;
 
-#if KT_FP8_LAYERWISE_HAS_CUDA
+#if KT_FP8_LAYERWISE_HAS_DEVICE
   cudaStream_t copy_stream_ = nullptr;
   std::array<cudaEvent_t, kFP8LayerwiseHostSlots> slot_events_{};
 #endif
