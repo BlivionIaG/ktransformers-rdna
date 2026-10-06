@@ -40,6 +40,8 @@ GPU/NPU backends:
   CPUINFER_USE_CUDA=0/1           -DKTRANSFORMERS_USE_CUDA
   CPUINFER_USE_SYCL=0/1           -DKTRANSFORMERS_USE_SYCL (GPTQ INT4 MoE)
   CPUINFER_USE_ROCM=0/1           -DKTRANSFORMERS_USE_ROCM
+  KT_ROCM_ARCHS=gfx1030;gfx1100   Per-arch HIP list (PYTORCH_ROCM_ARCH also accepted)
+  ROCM_PATH=/opt/rocm             ROCm root (default /opt/rocm)
   CPUINFER_USE_MUSA=0/1           -DKTRANSFORMERS_USE_MUSA
   CPUINFER_USE_MACA=0/1           -DKTRANSFORMERS_USE_MACA
   CPUINFER_USE_ASCEND_NPU=0/1     -DKTRANSFORMERS_USE_ASCEND_NPU
@@ -765,6 +767,19 @@ class CMakeBuild(build_ext):
                 print(f"-- Set CUDA architectures: {archs_env}")
         if _env_get_bool("CPUINFER_USE_ROCM", False):
             cmake_args.append("-DKTRANSFORMERS_USE_ROCM=ON")
+            rocm_archs = os.environ.get("KT_ROCM_ARCHS", "").strip()
+            if not rocm_archs:
+                rocm_archs = os.environ.get("PYTORCH_ROCM_ARCH", "").strip()
+            if not rocm_archs:
+                rocm_archs = "gfx1030;gfx1100"
+            rocm_archs = rocm_archs.replace(",", ";").replace(" ", ";")
+            if not any(a.startswith("-DKT_ROCM_ARCHS=") for a in cmake_args):
+                cmake_args.append(f"-DKT_ROCM_ARCHS={rocm_archs}")
+            rocm_path = os.environ.get("ROCM_PATH", "").strip()
+            if rocm_path and not any(a.startswith("-DROCM_PATH=") for a in cmake_args):
+                cmake_args.append(f"-DROCM_PATH={rocm_path}")
+            print(f"-- Enabling ROCm backend (-DKTRANSFORMERS_USE_ROCM=ON) archs={rocm_archs}")
+            print("-- WMMA objects are compiled per gfx1100-class arch and are not linked into gfx1030")
         if _env_get_bool("CPUINFER_USE_MUSA", False):
             cmake_args.append("-DKTRANSFORMERS_USE_MUSA=ON")
         if _env_get_bool("CPUINFER_USE_MACA", False):
@@ -823,6 +838,7 @@ class CMakeBuild(build_ext):
 
         # On some systems LTO + CMake + pybind may place the built .so inside build tree; move if needed
         built_candidates = list(build_temp.rglob(f"{ext.name}*.so"))
+        built_candidates += list(build_temp.rglob("libkt_rdna_*.so"))
         for cand in built_candidates:
             if cand.parent != extdir:
                 target = extdir / cand.name
