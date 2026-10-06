@@ -23,11 +23,22 @@ int kt_rdna_wmma_entry() { return 1100; }
 #error "kt_rdna WMMA object compiled for a non-gfx11 device"
 #endif
 
+// hipcc rejects ext_vector_type of __half: __half is a class, not a scalar.
+// The WMMA builtin takes a vector of _Float16. Bit-convert only where a
+// __half value meets that vector.
+__device__ inline _Float16 kt_rdna_f16_from_half(__half value) {
+  // __half_raw::data is the _Float16 member of the HIP half union.
+  return static_cast<__half_raw>(value).data;
+}
+
 __device__ float kt_rdna_wmma_f32_16x16x16_f16(float* out) {
-  using half16 = __attribute__((ext_vector_type(16))) __half;
-  using float8 = __attribute__((ext_vector_type(8))) float;
+  using half16 = __attribute__((__vector_size__(16 * sizeof(_Float16)))) _Float16;
+  using float8 = __attribute__((__vector_size__(8 * sizeof(float)))) float;
+  __half zero{};
   half16 a = {};
   half16 b = {};
+  a[0] = kt_rdna_f16_from_half(zero);
+  b[0] = kt_rdna_f16_from_half(zero);
   float8 c = {};
   float8 d = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a, b, c);
   if (out != nullptr && threadIdx.x == 0) out[0] = d[0];

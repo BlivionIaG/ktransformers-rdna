@@ -35,9 +35,41 @@ class TestRdnaPhase0(unittest.TestCase):
         self.assertIn("non-gfx11", src)
         self.assertIn("__builtin_amdgcn_wmma_f32_16x16x16_f16_w32", src)
         self.assertIn("__HIP_DEVICE_COMPILE__", src)
+        self.assertIn("_Float16", src)
+        self.assertIn("kt_rdna_f16_from_half", src)
+        self.assertNotIn("ext_vector_type(16))) __half", src)
         probe = (KT / "rocm/arch_probe.hip").read_text(encoding="utf-8")
         self.assertNotIn("wmma", probe.lower())
         self.assertIn("v_dot2_f32_f16", probe)
+
+    def test_arch_split_gate_reads_gfx1030_isa(self):
+        script = (KT / "scripts/rdna_verify_arch_split.sh").read_text(encoding="utf-8")
+        self.assertIn("llvm-objdump", script)
+        self.assertIn("roc-obj", script)
+        self.assertIn("v_wmma_", script)
+        self.assertIn("v_mfma_", script)
+        self.assertIn("REQUIRE_DOT", script)
+        for mnemonic in (
+            "v_dot2_f32_f16",
+            "v_dot2c_f32_f16",
+            "v_dot4_i32_i8",
+            "v_dot4c_i32_i8",
+        ):
+            self.assertIn(mnemonic, script)
+        call = script.find('disassemble_gfx1030_so "${GFX1030}"')
+        early_exit = script.find("exit 0")
+        self.assertGreater(call, 0)
+        self.assertLess(call, early_exit)
+
+    def test_kt_kernel_job_installs_git_before_checkout(self):
+        workflow = (ROOT / ".github/workflows/rocm-rdna.yml").read_text(encoding="utf-8")
+        kt = workflow.split("\n  kt-kernel:\n", 1)[1]
+        git_install = kt.find("apt-get install")
+        checkout = kt.find("actions/checkout")
+        self.assertGreater(git_install, 0)
+        self.assertLess(git_install, checkout)
+        self.assertIn("git", kt[git_install:checkout])
+        self.assertIn("git submodule update --init third_party/pybind11 third_party/llama.cpp", kt)
 
     def test_cmake_compiles_one_arch_per_object(self):
         cmake = (KT / "rocm/CMakeLists.txt").read_text(encoding="utf-8")

@@ -64,9 +64,10 @@ jobs:
       image: ${{ github.event_name == 'workflow_dispatch' && inputs.rocm_image || 'rocm/dev-ubuntu-24.04:7.14.0-full' }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
+      # The ROCm image has no git. checkout before git is installed downloads a
+      # tarball with no .git, and the submodule step then fails. Install git
+      # first. Only pybind11 and llama.cpp are needed; the other gitlinks
+      # (sglang, custom_flashinfer) stay uninitialized.
       - name: Host packages
         run: |
           apt-get update
@@ -74,6 +75,9 @@ jobs:
             build-essential cmake ninja-build git pkg-config \
             python3 python3-setuptools python3-dev \
             libhwloc-dev libnuma-dev libcurl4-openssl-dev ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
       - name: CPU submodules only
         run: git submodule update --init third_party/pybind11 third_party/llama.cpp
       - name: Build kt-kernel (ROCm, AVX2 CPU experts)
