@@ -13,6 +13,9 @@ include LICENSE
 # CMake modules and configuration
 recursive-include cmake *.cmake *.in
 
+# ROCm per-arch device libraries (gfx1030 / gfx1100, WMMA split)
+recursive-include rocm *.h *.hpp *.cpp *.hip *.cmake
+
 # C++ source files
 recursive-include cpu_backend *.h *.hpp *.cpp *.c *.cc
 recursive-include operators *.h *.hpp *.cpp *.c *.cc

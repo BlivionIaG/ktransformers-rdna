@@ -1,5 +1,7 @@
 # ROCm Support for ktransformers (Beta)
 
+> **This fork** ([BlivionIaG/ktransformers-rdna](https://github.com/BlivionIaG/ktransformers-rdna)): the `local_chat.py` path below is dead. The SGLang + kt-kernel port is tracked in [docs/rdna/PHASE0.md](../../docs/rdna/PHASE0.md). GPU kernels that live in SGLang are handled in [BlivionIaG/sglang-kt-rdna](https://github.com/BlivionIaG/sglang-kt-rdna).
+
 ## Introduction
 
 ### Overview

@@ -59,6 +59,10 @@ class TestFP8LayerwiseTransportContract(unittest.TestCase):
         self.assertIn("TP sizes 1 through 8", source)
         self.assertIn('m.attr("FP8_LAYERWISE_CONTROL_BYTES")', bindings)
         self.assertIn('m.attr("FP8_LAYERWISE_MAX_TP_SIZE")', bindings)
+        self.assertIn("#include <cuda_runtime_api.h>", source)
+        self.assertIn("KTRANSFORMERS_USE_ROCM", source)
+        self.assertIn("#include <hip/hip_runtime_api.h>", source)
+        self.assertIn("CUDA- or ROCm-enabled", source)
 
     def test_thin_wrapper_forwards_exact_layer_contract(self):
         invoke = _compile_thin_method()
