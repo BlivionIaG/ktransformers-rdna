@@ -96,12 +96,11 @@ inline float bf16_bits_to_float(uint16_t bf) {
 // decode came from assuming an unpack's lane arrangement, and the index order is the
 // one thing that must be exactly right.
 inline void expand_16(const uint8_t* packed, int kk, float* out16) {
-  for (int t = 0; t < 16; ++t) {
-    const int kx = kk + t;
-    const uint8_t byte = packed[kx >> 1];
-    const uint8_t nib =
-        (kx & 1) ? static_cast<uint8_t>(byte >> 4) : static_cast<uint8_t>(byte & 0x0F);
-    out16[t] = kTable[nib & 0x0F];
+  const uint8_t* p = packed + (kk >> 1);
+  for (int t = 0; t < 16; t += 2) {
+    const uint8_t byte = p[t >> 1];
+    out16[t] = kTable[byte & 0x0F];
+    out16[t + 1] = kTable[(byte >> 4) & 0x0F];
   }
 }
 
@@ -113,28 +112,11 @@ inline void expand_16(const uint8_t* packed, int kk, float* out16) {
 // Verified against the scalar reference: 0 mismatched columns out of 80000
 // (5000 random byte patterns x 16 columns).
 inline void expand_16_avx2(const uint8_t* packed, float* out16) {
-  const __m256i lut_lo = _mm256_broadcastsi128_si256(
-      _mm_loadu_si128(reinterpret_cast<const __m128i*>(kLutLo)));
-  const __m256i lut_hi = _mm256_broadcastsi128_si256(
-      _mm_loadu_si128(reinterpret_cast<const __m128i*>(kLutHi)));
-
-  alignas(32) uint8_t idx[16];
-  for (int t = 0; t < 16; ++t) {
+  for (int t = 0; t < 16; t += 2) {
     const uint8_t byte = packed[t >> 1];
-    idx[t] = static_cast<uint8_t>(((t & 1) ? (byte >> 4) : byte) & 0x0F);
+    out16[t] = kTable[byte & 0x0F];
+    out16[t + 1] = kTable[(byte >> 4) & 0x0F];
   }
-  const __m256i v = _mm256_load_si256(reinterpret_cast<const __m256i*>(idx));
-  const __m256i bl = _mm256_shuffle_epi8(lut_lo, v);
-  const __m256i bh = _mm256_shuffle_epi8(lut_hi, v);
-
-  // Both operands hold the same 16 columns in the same order, so the lane-local
-  // unpacks cannot reorder anything; storing lo-then-hi yields packed order.
-  const __m256i u = _mm256_unpacklo_epi8(bl, bh);
-  const __m256i u2 = _mm256_unpackhi_epi8(bl, bh);
-  alignas(32) uint16_t words[16];
-  _mm256_store_si256(reinterpret_cast<__m256i*>(words), u);
-  _mm256_store_si256(reinterpret_cast<__m256i*>(words + 8), u2);
-  for (int t = 0; t < 16; ++t) out16[t] = bf16_bits_to_float(words[t]);
 }
 
 inline void dequant_row_avx2(const uint8_t* packed, const float* scale, int k,
@@ -143,7 +125,7 @@ inline void dequant_row_avx2(const uint8_t* packed, const float* scale, int k,
   int kk = 0;
   for (; kk + 16 <= k; kk += 16) {
     float nib16[16];
-    expand_16_avx2(packed + (kk >> 1), nib16);
+    expand_16(packed, kk, nib16);
     const __m256 g = _mm256_mul_ps(_mm256_set1_ps(scale[kk >> 4]), vscale2);
     _mm256_storeu_ps(dst + kk, _mm256_mul_ps(_mm256_loadu_ps(nib16), g));
     _mm256_storeu_ps(dst + kk + 8, _mm256_mul_ps(_mm256_loadu_ps(nib16 + 8), g));
@@ -166,7 +148,7 @@ inline void dequant_row_avx512(const uint8_t* packed, const float* scale, int k,
   int kk = 0;
   for (; kk + 16 <= k; kk += 16) {
     float nib16[16];
-    expand_16_avx2(packed + (kk >> 1), nib16);
+    expand_16(packed, kk, nib16);
     const __m512 g = _mm512_mul_ps(_mm512_set1_ps(scale[kk >> 4]), vscale2);
     _mm512_storeu_ps(dst + kk, _mm512_mul_ps(_mm512_loadu_ps(nib16), g));
   }
