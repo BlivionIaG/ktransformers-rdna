@@ -13,7 +13,11 @@
 #define KT_RDNA_STR(x) KT_RDNA_STR_IMPL(x)
 
 extern "C" {
+// Default visibility keeps this in the loadable image. hipcc -shared can
+// otherwise drop the unreferenced host string, and `strings` then misses it.
+__attribute__((used, visibility("default")))
 const char kt_rdna_object_arch[] = "KT_RDNA_OBJECT_ARCH=" KT_RDNA_STR(KT_RDNA_ARCH_TAG);
+__attribute__((used, visibility("default")))
 int kt_rdna_object_has_matrix_core() { return 0; }
 }
 

@@ -13,7 +13,9 @@
 #define KT_RDNA_STR(x) KT_RDNA_STR_IMPL(x)
 
 extern "C" {
+__attribute__((used, visibility("default")))
 const char kt_rdna_wmma_object_arch[] = "KT_RDNA_WMMA_TU=" KT_RDNA_STR(KT_RDNA_ARCH_TAG);
+__attribute__((used, visibility("default")))
 int kt_rdna_wmma_entry() { return 1100; }
 }
 

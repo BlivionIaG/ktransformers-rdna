@@ -79,7 +79,12 @@ jobs:
         with:
           submodules: false
       - name: CPU submodules only
-        run: git submodule update --init third_party/pybind11 third_party/llama.cpp
+        run: |
+          # The runner owns the workspace; git inside the container refuses it
+          # until the directory is marked safe.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory '*'
+          git submodule update --init third_party/pybind11 third_party/llama.cpp
       - name: Build kt-kernel (ROCm, AVX2 CPU experts)
         env:
           CPUINFER_USE_ROCM: "1"

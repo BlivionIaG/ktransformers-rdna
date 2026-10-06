@@ -289,19 +289,27 @@ if ! nm "${WMMA}" | grep -q 'kt_rdna_wmma_entry'; then
   exit 1
 fi
 
-if strings "${GFX1030}" | grep -q 'KT_RDNA_WMMA_TU='; then
+# Debian/Ubuntu strings scans only allocated sections unless --all is set.
+# The marker can also sit in the embedded offload bundle.
+so_strings() {
+  strings -a "$1"
+}
+
+if so_strings "${GFX1030}" | grep -q 'KT_RDNA_WMMA_TU='; then
   echo "gfx1030 library contains the WMMA translation-unit marker" >&2
   exit 1
 fi
-if ! strings "${GFX1030}" | grep -q 'KT_RDNA_OBJECT_ARCH=gfx1030'; then
+if ! so_strings "${GFX1030}" | grep -q 'KT_RDNA_OBJECT_ARCH=gfx1030'; then
   echo "gfx1030 library is missing KT_RDNA_OBJECT_ARCH=gfx1030" >&2
+  so_strings "${GFX1030}" | grep -F 'KT_RDNA' >&2 || true
+  nm -D "${GFX1030}" | grep -F 'kt_rdna' >&2 || true
   exit 1
 fi
-if ! strings "${GFX1100}" | grep -q 'KT_RDNA_OBJECT_ARCH=gfx1100'; then
+if ! so_strings "${GFX1100}" | grep -q 'KT_RDNA_OBJECT_ARCH=gfx1100'; then
   echo "gfx1100 library is missing KT_RDNA_OBJECT_ARCH=gfx1100" >&2
   exit 1
 fi
-if ! strings "${WMMA}" | grep -q 'KT_RDNA_WMMA_TU=gfx1100'; then
+if ! so_strings "${WMMA}" | grep -q 'KT_RDNA_WMMA_TU=gfx1100'; then
   echo "WMMA library is missing KT_RDNA_WMMA_TU=gfx1100" >&2
   exit 1
 fi
