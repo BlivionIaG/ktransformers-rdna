@@ -85,6 +85,9 @@ static const bool _is_plain_ = false;
 #include <type_traits>
 
 #include "fp8_layerwise_transport.hpp"
+#if defined(KTRANSFORMERS_USE_ROCM)
+#include "rdna_arch.h"
+#endif
 #include "operators/kvcache/kvcache.h"
 #include "operators/llamafile/linear.h"
 #include "operators/llamafile/mla.hpp"
@@ -580,6 +583,23 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
   m.attr("__fp8_weight_layout__") = "block-e4m3-128x128";
   m.attr("FP8_LAYERWISE_CONTROL_BYTES") = kt::layerwise::kFP8LayerwiseControlBytes;
   m.attr("FP8_LAYERWISE_MAX_TP_SIZE") = kt::layerwise::kFP8LayerwiseMaxTPSize;
+#if defined(KTRANSFORMERS_USE_ROCM)
+  m.attr("RDNA_COMPILED_ARCHS") = kt::rdna::compiled_archs();
+  m.def("rdna_compiled_archs", &kt::rdna::compiled_archs, "Comma-separated HIP archs this build compiled.");
+  m.def(
+      "rdna_wmma_allowed",
+      [](const std::string& gcn_arch) { return kt::rdna::wmma_rejection(gcn_arch).empty(); },
+      py::arg("gcn_arch"),
+      "True only for gfx1100-class archs. gfx1030 is false and must not dlopen WMMA.");
+  m.def(
+      "rdna_load_wmma",
+      [](const std::string& gcn_arch, const std::string& library_path) {
+        const std::string err = kt::rdna::load_wmma_library(gcn_arch, library_path);
+        if (!err.empty()) throw std::runtime_error(err);
+      },
+      py::arg("gcn_arch"), py::arg("library_path"),
+      "dlopen a gfx1100-only WMMA library. Refuses gfx1030 without opening the file.");
+#endif
 
   m.def("initialize_fp8_layerwise_control", &kt::layerwise::initialize_fp8_layerwise_control,
         py::arg("control_ptr"), py::arg("control_size"), py::arg("tp_size"));

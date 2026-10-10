@@ -1,14 +1,27 @@
 #pragma once
 
+#ifndef __HIP_PLATFORM_AMD__
+#define __HIP_PLATFORM_AMD__
+#endif
+// Host translation units (cpuinfer.h) only need the HIP runtime API.
+// Device headers pull clang-oriented types and are included for hipcc TUs.
+#include <hip/hip_runtime_api.h>
+#if defined(__HIPCC__) || defined(KT_HIP_ENABLE_DEVICE_TYPES)
 #define HIP_ENABLE_WARP_SYNC_BUILTINS 1
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
-#include <hipblas/hipblas.h>
+typedef hip_bfloat16 nv_bfloat16;
+#endif
+// hipBLAS/rocBLAS are not used by the host module. Include them only when a
+// TU asks, so a runtime-only ROCm install still builds.
+#if defined(KT_HIP_ENABLE_BLAS)
 #ifdef __HIP_PLATFORM_AMD__
-// for rocblas_initialize()
 #include "rocblas/rocblas.h"
 #endif  // __HIP_PLATFORM_AMD__
+#include <hipblas/hipblas.h>
+#define KT_HIP_HAS_BLAS 1
+#endif
 
 #define CUBLAS_COMPUTE_16F HIPBLAS_R_16F
 #define CUBLAS_COMPUTE_32F HIPBLAS_R_32F
@@ -151,7 +164,11 @@
 #define CUBLAS_STATUS_INTERNAL_ERROR HIPBLAS_STATUS_INTERNAL_ERROR
 #define CUBLAS_STATUS_NOT_SUPPORTED HIPBLAS_STATUS_NOT_SUPPORTED
 
+// Device-only. Defining this on the host makes every TU that includes
+// cpuinfer.h look like CUDA device code.
+#if defined(__HIP_DEVICE_COMPILE__) && !defined(__CUDA_ARCH__)
 #define __CUDA_ARCH__ 1300
+#endif
 
 #if defined(__gfx803__) || defined(__gfx900__) || defined(__gfx906__)
 #define GCN
@@ -178,5 +195,3 @@
 #ifndef __has_builtin
 #define __has_builtin(x) 0
 #endif
-
-typedef hip_bfloat16 nv_bfloat16;
