@@ -1,0 +1,18 @@
+#pragma once
+// Compile-only stand-in. ATen/cuda headers name these types. This module
+// does not call cuSPARSE.
+
+typedef enum cusparseStatus_t {
+  CUSPARSE_STATUS_SUCCESS = 0,
+  CUSPARSE_STATUS_NOT_INITIALIZED = 1,
+  CUSPARSE_STATUS_ALLOC_FAILED = 2,
+  CUSPARSE_STATUS_INVALID_VALUE = 3,
+  CUSPARSE_STATUS_ARCH_MISMATCH = 4,
+  CUSPARSE_STATUS_MAPPING_ERROR = 5,
+  CUSPARSE_STATUS_EXECUTION_FAILED = 6,
+  CUSPARSE_STATUS_INTERNAL_ERROR = 7,
+  CUSPARSE_STATUS_MATRIX_TYPE_NOT_SUPPORTED = 8,
+  CUSPARSE_STATUS_NOT_SUPPORTED = 9
+} cusparseStatus_t;
+
+typedef void* cusparseHandle_t;
