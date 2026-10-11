@@ -67,11 +67,15 @@ static const bool _is_plain_ = false;
 #include "operators/avx2/gptq_int4_avxvnni-moe.hpp"
 #include "operators/avx2/gptq_int4_avxvnni_packed-moe.hpp"
 #include "operators/avx2/mxfp4-moe.hpp"
+<<<<<<< HEAD
 #include "operators/avx2/sft_mxfp4-moe.hpp"
 #include "operators/avx2/sft_rawint4-moe.hpp"
 #if !defined(USE_AMX_AVX_KERNEL)
 #include "operators/moe-sft-tp.hpp"
 #endif
+=======
+#include "operators/dense/bind-dense-head.cpp"
+>>>>>>> 03ed837 (wip: exl3 mul1 capturer wiring + kt EXL3 backend)
 #include "operators/avx2/mxfp8-moe.hpp"
 #include "operators/avx2/rawint4-moe.hpp"
 #include "operators/avx2/rawint4_avxvnni-moe.hpp"
@@ -548,14 +552,22 @@ void bind_moe_module(py::module_& moe_module, const char* name) {
 }
 
 PYBIND11_MODULE(kt_kernel_ext, m) {
+<<<<<<< HEAD
   m.def("_bf16_sumsq_ptr", &bf16_sumsq_ptr, py::arg("data_ptr"), py::arg("numel"),
         py::call_guard<py::gil_scoped_release>());
 #if defined(HAVE_AMX)
+=======
+#if defined(USE_AMX_AVX_KERNEL) && defined(HAVE_AMX)
+>>>>>>> 03ed837 (wip: exl3 mul1 capturer wiring + kt EXL3 backend)
   m.attr("__cpu_variant__") = "amx";
   m.attr("__int8_kernel__") = "amx-int8";
 #elif defined(__AVX512BF16__) && defined(__AVX512VNNI__)
   m.attr("__cpu_variant__") = "avx512_bf16";
+#if defined(USE_AMX_AVX_KERNEL)
   m.attr("__int8_kernel__") = amx::int8_vnni_backend_name();
+#else
+  m.attr("__int8_kernel__") = "unsupported";
+#endif
 #elif defined(__AVX512VBMI__)
   m.attr("__cpu_variant__") = "avx512_vbmi";
   m.attr("__int8_kernel__") = "unsupported";
@@ -670,6 +682,7 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
       ;
 
   auto linear_module = m.def_submodule("linear");
+  install_dense_nvfp4_head(linear_module);
   py::class_<LinearConfig>(linear_module, "LinearConfig")
       .def(py::init([](int hidden_size, int intermediate_size, int stride, int group_max_len, intptr_t proj,
                        int proj_type, int hidden_type) {
