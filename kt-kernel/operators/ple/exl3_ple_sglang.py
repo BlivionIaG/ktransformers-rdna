@@ -93,14 +93,32 @@ class Exl3PackedNGramEmbedding(torch.nn.Module):
         self.register_buffer("packed", stacked, persistent=False)
         self.dim = _ring_dim(SHARD_COLS, K)
 
-    def forward(self, row_idx: torch.Tensor) -> torch.Tensor:
-        target_device = row_idx.device
-        orig_shape = row_idx.shape
-        flat_cpu = row_idx.detach().to(self.packed.device).reshape(-1)
-        rows = self.packed[flat_cpu]                              # (N, 51) int16, CPU
-        out = _dequant(rows, K=self.K)                            # (N, dim) bf16, CPU
+    def allocate_output(self, shape, device):
+        return torch.empty(shape, dtype=torch.bfloat16, device=device)
+
+    def reduce(self, output):
+        # No TP reduce for a single-process model
+        return output
+
+    def gather(self, row_idx: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+        """PLE prefetch path. Mimics Qwen4ExpPinnedHostEmbedding.gather(lookup_ids, out=out_view).
+        The model calls this on a non-default stream; we must avoid non-pinned CPU<->GPU copies."""
+        N = row_idx.numel()
         H = self.head_bias.shape[0]
-        assert out.shape[0] % H == 0, f"flat N={out.shape[0]} not divisible by H={H}"
-        head_idx = (torch.arange(out.shape[0], device=out.device) % H)
-        out = out + self.head_bias[head_idx]
-        return out.view(*orig_shape, self.dim).to(target_device)
+        if N == 0:
+            return out
+        if not hasattr(self, "_row_buf") or self._row_buf.numel() < N:
+            self._row_buf = torch.empty(N, dtype=torch.int64, pin_memory=True)
+            self._deq_buf = torch.empty(N, self.dim, dtype=torch.bfloat16, pin_memory=True)
+        row_buf = self._row_buf[:N]
+        deq_buf = self._deq_buf[:N]
+        row_buf.copy_(row_idx.reshape(-1), non_blocking=True)
+        rows = self.packed[row_buf]
+        deq = _dequant(rows, K=self.K)
+        head_idx = torch.arange(N) % H
+        torch.add(deq, self.head_bias[head_idx], out=deq_buf)
+        # H2D from pinned is capture-safe
+        out.copy_(deq_buf.view(out.shape), non_blocking=True)
+        return out
+
+    def forward(self, row_idx: torch.Tensor) -> torch.Tensor:
