@@ -74,6 +74,10 @@ def _should_bypass_stream_callback(device: torch.device) -> bool:
     """Return True iff we must use the synchronous submit/sync path."""
     if os.environ.get("KT_FORCE_SYNC_SUBMIT", "") == "1":
         return True
+    # KTRANSFORMERS_CPU_ONLY builds do not bind submit_with_cuda_stream.
+    # submit() and sync() are present and are the correct path there.
+    if not hasattr(kt_kernel_ext.CPUInfer, "submit_with_cuda_stream"):
+        return True
     if device.type == "npu" and not _uses_external_npu_report_subscriber():
         # Without a dispatcher thread, aclrtLaunchCallback tasks never fire and
         # submit_with_cuda_stream would hang forever. Degrade to sync instead.

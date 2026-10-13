@@ -612,11 +612,13 @@ class NativeMoEWrapper(BaseMoEWrapper):
         # by GLM-5-Next's E4M3 + FP32 [128, 128] checkpoint format.
         # if the experts.py guard is bypassed (e.g., by a future caller
         # that constructs NativeMoEWrapper directly). Origin: kt-sglang 耦合.
-        if swiglu_limit != 0.0 and method not in ("FP8", "MXFP4", "MXFP8"):
+        # NVFP4 uses the AVX2 MXFP4 kernel (group 16). That kernel's
+        # act_fn applies GLM's one-sided gate clamp when swiglu_alpha is 0.
+        if swiglu_limit != 0.0 and method not in ("FP8", "MXFP4", "MXFP8", "NVFP4"):
             raise ValueError(
                 f"NativeMoEWrapper received swiglu_limit={swiglu_limit} with "
                 f"method={method!r}; the clamp is supported only by "
-                "FP8/MXFP4/MXFP8. "
+                "FP8/MXFP4/MXFP8/NVFP4. "
                 f"This indicates a missing guard in the caller."
             )
         if method == "RAWINT4" and not (
@@ -875,11 +877,12 @@ class NativeMoEWrapper(BaseMoEWrapper):
             "FP8",
             "MXFP4",
             "MXFP8",
+            "NVFP4",
         ):
             raise ValueError(
                 f"NativeMoEWrapper.load_weights: swiglu_limit="
                 f"{self.swiglu_limit} with method={self.method!r}; clamp is "
-                f"only valid for FP8/MXFP4/MXFP8."
+                f"only valid for FP8/MXFP4/MXFP8/NVFP4."
             )
         moe_config.swiglu_limit = self.swiglu_limit
 

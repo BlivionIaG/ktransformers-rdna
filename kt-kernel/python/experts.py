@@ -378,17 +378,19 @@ def _create_inference_wrapper(
     # validates the GGUF tensor types while loading and applies the clamp in its
     # scalar/NEON-independent activation step.
     extra_kwargs = {}
-    if method in ("FP8", "MXFP4", "MXFP8", "LLAMAFILE"):
+    # NVFP4 shares the AVX2 MXFP4 act_fn, which honors swiglu_limit
+    # (one-sided gate clamp) when swiglu_alpha is 0. GLM-5.3-Flash uses that.
+    if method in ("FP8", "MXFP4", "MXFP8", "NVFP4", "LLAMAFILE"):
         extra_kwargs["swiglu_limit"] = swiglu_limit
         extra_kwargs["swiglu_alpha"] = swiglu_alpha
     elif swiglu_limit != 0.0:
         raise ValueError(
             f"swiglu_limit={swiglu_limit} is only supported on "
-            "method='FP8'/'MXFP4'/'MXFP8'/'LLAMAFILE', "
+            "method='FP8'/'MXFP4'/'MXFP8'/'NVFP4'/'LLAMAFILE', "
             f"got method={method!r} (backend={backend_cls.__name__}). This "
             f"usually means SGLANG_DSV4_2604_SUBMODE=2604B is set in the "
             f"environment while the current launch does not actually use "
-            "FP8/MXFP4/MXFP8/LLAMAFILE weights — either unset the env or select a "
+            "FP8/MXFP4/MXFP8/NVFP4/LLAMAFILE weights — either unset the env or select a "
             "matching --kt-method."
         )
     return backend_cls(
